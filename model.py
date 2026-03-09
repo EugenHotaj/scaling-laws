@@ -17,6 +17,7 @@ class GPTConfig:
     n_head: int = 12
     n_embd: int = 768
 
+
 class MLP(nn.Module):
     def __init__(self, config: GPTConfig):
         super().__init__()
@@ -44,7 +45,7 @@ class CausalSelfAttention(nn.Module):
         # Causal mask.
         bias = torch.tril(torch.ones(config.block_size, config.block_size))
         bias = bias.view(1, 1, config.block_size, config.block_size)
-        self.register_buffer("bias", bias)
+        self.register_buffer("softmax_bias", bias, persistent=False)
 
     def forward(self, x):
         # Batch size, sequence length, embedding dimensionality (n_embd).
@@ -60,7 +61,7 @@ class CausalSelfAttention(nn.Module):
 
         # Manual implementation of attention.
         att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-        att = att.masked_fill(self.bias[:, :, :T, :T] == 0, float("-inf"))
+        att = att.masked_fill(self.softmax_bias[:, :, :T, :T] == 0, float("-inf"))
         att = F.softmax(att, dim=-1)
         y = att @ v  # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
 
@@ -98,104 +99,18 @@ class GPT(nn.Module):
                 ln_f=nn.LayerNorm(config.n_embd),
             )
         )
-        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-        # https://paperswithcode.com/method/weight-tying
-        self.model.wte.weight = self.lm_head.weight
 
     def forward(self, idx):
         _, t = idx.size()
-        pos = torch.arange(0, t, dtype=torch.long, device=idx.device)  # (t)
+        pos = torch.arange(0, t, dtype=torch.long, device=idx.device)
 
         # Forward the GPT model.
-        tok_emb = self.model.wte(idx)  # token embeddings (B, T, n_embd)
-        pos_emb = self.model.wpe(pos)  # position embeddings (T, n_embd)
+        tok_emb = self.model.wte(idx)
+        pos_emb = self.model.wpe(pos)
         x = tok_emb + pos_emb
         for block in self.model.h:
             x = block(x)
         x = self.model.ln_f(x)
 
-        # Mini-optimization: Only forward the lm_head on the very last position.
-        return self.lm_head(x[:, [-1], :])  # Using [-1] to preserve the time dim.
-
-    @torch.no_grad()
-    def generate(self, idx, new_tokens, temp=0.8):
-        assert len(idx) + new_tokens <= self.config.block_size
-
-        for _ in range(new_tokens):
-            logits = self(idx)[:, -1, :] / temp
-            probs = F.softmax(logits, dim=-1)
-            idx_next = torch.multinomial(probs, num_samples=1)
-            idx = torch.cat((idx, idx_next), dim=1)
-        return idx
-
-
-def load_linear(module: nn.Linear, name: str, in_f: int, out_f: int) -> None:
-    with open(f"models/124M/raw/model-{name}-w", "rb") as file_:
-        tensor = np.frombuffer(file_.read(), dtype=np.float32)
-        module.weight.data = torch.tensor(tensor).reshape(out_f, in_f)
-
-    with open(f"models/124M/raw/model-{name}-b", "rb") as file_:
-        tensor = np.frombuffer(file_.read(), dtype=np.float32)
-        module.bias.data = torch.tensor(tensor).reshape(out_f)
-
-
-def load_layernorm(module: nn.LayerNorm, name: str) -> None:
-    with open(f"models/124M/raw/model-{name}-g", "rb") as file_:
-        tensor = np.frombuffer(file_.read(), dtype=np.float32)
-        module.weight.data = torch.tensor(tensor)
-
-    with open(f"models/124M/raw/model-{name}-b", "rb") as file_:
-        tensor = np.frombuffer(file_.read(), dtype=np.float32)
-        module.bias.data = torch.tensor(tensor)
-
-
-def load_attention(module: CausalSelfAttention, layer: int, n_embd: int) -> None:
-    load_linear(module.c_attn, f"h{layer}-attn-c_attn", n_embd, 3 * n_embd)
-    load_linear(module.c_proj, f"h{layer}-attn-c_proj", n_embd, n_embd)
-
-
-def load_mlp(module: MLP, layer: int, n_embd: int) -> None:
-    load_linear(module.c_fc, f"h{layer}-mlp-c_fc", n_embd, 4 * n_embd)
-    load_linear(module.c_proj, f"h{layer}-mlp-c_proj", 4 * n_embd, n_embd)
-
-
-def load_block(module: Block, layer: int, n_embd: int) -> None:
-    load_layernorm(module.ln_1, f"h{layer}-ln_1")
-    load_attention(module.attn, layer, n_embd)
-    load_layernorm(module.ln_2, f"h{layer}-ln_2")
-    load_mlp(module.mlp, layer, n_embd)
-
-
-def load_embedding(
-    module: nn.Embedding, name: str, vocab_size: int, n_embd: int
-) -> None:
-    with open(f"models/124M/raw/model-{name}", "rb") as file_:
-        tensor = np.frombuffer(file_.read(), dtype=np.float32)
-        tensor = torch.tensor(tensor).reshape(vocab_size, n_embd)
-        module.weight.data = tensor
-
-
-def load_gpt(module: GPT, config: GPTConfig) -> None:
-    load_embedding(module.transformer.wte, "wte", config.vocab_size, config.n_embd)
-    load_embedding(module.transformer.wpe, "wpe", config.block_size, config.n_embd)
-    for i in range(config.n_layer):
-        load_block(module.transformer.h[i], i, config.n_embd)
-    load_layernorm(module.transformer.ln_f, "ln_f")
-    # Loading wte should automatically load lm_head since they point to the same tensor.
-    assert module.lm_head.weight is module.transformer.wte.weight
-
-
-if __name__ == '__main__':
-    gpt_config = GPTConfig()
-    gpt = GPT(gpt_config).eval()
-    load_gpt(gpt, gpt_config)
-
-    encoder = tiktoken.get_encoding("gpt2")
-    encoded = encoder.encode(
-        "Marcus Aurelius said thus: ", allowed_special={"<|endoftext|>"}
-    )
-    inputs = torch.tensor(encoded).view((1, -1))
-    outputs = gpt(inputs)
-
-    generated = gpt.generate(inputs, 10).tolist()[0]
-    print(encoder.decode(generated))
+        # GPT-2 models use tied wte and lm_head.
+        return F.linear(x, self.model.wte.weight)

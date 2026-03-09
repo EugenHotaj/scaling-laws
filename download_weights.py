@@ -1,5 +1,6 @@
-"""Downloads GPT-2 checkpoints and converts weights into PyTorch-loadable format."""
+"""Downloads GPT-2 weights and converts them into PyTorch-loadable format."""
 
+import argparse
 import json
 import os
 import re
@@ -11,23 +12,19 @@ import torch
 from tqdm import tqdm
 
 
-if __name__ == "__main__":
-    model = "models/124M"
+def download_model(model_size: str) -> None:
+    model = f"models/{model_size}"
 
     # Download the model weights from OpenAI if they don't already exist.
     if not os.path.exists(model):
         os.makedirs(model)
         for filename in [
-            "checkpoint",
-            "model.ckpt.data-00000-of-00001",
-            "model.ckpt.index",
-            "model.ckpt.meta",
+            "checkpoint", "model.ckpt.data-00000-of-00001", "model.ckpt.index", "model.ckpt.meta"
         ]:
             resp = requests.get(
                 f"https://openaipublic.blob.core.windows.net/gpt-2/{model}/{filename}",
                 stream=True,
             )
-
             with open(f"{model}/{filename}", "wb") as file_:
                 file_size = int(resp.headers["content-length"])
                 chunk_size = 1000
@@ -49,13 +46,22 @@ if __name__ == "__main__":
         state_dict = {}
         for name in variables:
             tensor = checkpoint.get_tensor(name).squeeze()
-            if name.endswith("/w"):
-                name = name[:-1] + "weight"
+            if name.endswith("wpe") or name.endswith("wte"):
+                name = name + "/weight"
+            elif name.endswith("/w") or name.endswith("/g"):
+                name = name[:-2] + "/weight"
                 # PyTorch transposes tensors compared to TensorFlow.
                 tensor = tensor.T
             elif name.endswith("/b"):
-                name = name[:-1] + "bias"
+                name = name[:-2] + "/bias"
             name = name.replace("/", ".")
             name = re.sub(r"\.h(\d+)\.", r".h.\1.", name)
             state_dict[name] = torch.tensor(tensor)
         torch.save(state_dict, pt_model_path)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model-size", default="124M", choices=("124M", "355M", "774M", "1558M"))
+    args = parser.parse_args()
+    download_model(args.model_size)
