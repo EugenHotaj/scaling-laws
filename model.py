@@ -90,7 +90,7 @@ class GPT(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
-        self.transformer = nn.ModuleDict(
+        self.model = nn.ModuleDict(
             dict(
                 wte=nn.Embedding(config.vocab_size, config.n_embd),
                 wpe=nn.Embedding(config.block_size, config.n_embd),
@@ -100,19 +100,19 @@ class GPT(nn.Module):
         )
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         # https://paperswithcode.com/method/weight-tying
-        self.transformer.wte.weight = self.lm_head.weight
+        self.model.wte.weight = self.lm_head.weight
 
     def forward(self, idx):
         _, t = idx.size()
         pos = torch.arange(0, t, dtype=torch.long, device=idx.device)  # (t)
 
         # Forward the GPT model.
-        tok_emb = self.transformer.wte(idx)  # token embeddings (B, T, n_embd)
-        pos_emb = self.transformer.wpe(pos)  # position embeddings (T, n_embd)
+        tok_emb = self.model.wte(idx)  # token embeddings (B, T, n_embd)
+        pos_emb = self.model.wpe(pos)  # position embeddings (T, n_embd)
         x = tok_emb + pos_emb
-        for block in self.transformer.h:
+        for block in self.model.h:
             x = block(x)
-        x = self.transformer.ln_f(x)
+        x = self.model.ln_f(x)
 
         # Mini-optimization: Only forward the lm_head on the very last position.
         return self.lm_head(x[:, [-1], :])  # Using [-1] to preserve the time dim.
@@ -185,25 +185,17 @@ def load_gpt(module: GPT, config: GPTConfig) -> None:
     assert module.lm_head.weight is module.transformer.wte.weight
 
 
-gpt_config = GPTConfig()
-gpt = GPT(gpt_config).eval()
-load_gpt(gpt, gpt_config)
+if __name__ == '__main__':
+    gpt_config = GPTConfig()
+    gpt = GPT(gpt_config).eval()
+    load_gpt(gpt, gpt_config)
 
-encoder = tiktoken.get_encoding("gpt2")
-encoded = encoder.encode(
-    "Marcus Aurelius said thus: ", allowed_special={"<|endoftext|>"}
-)
-inputs = torch.tensor(encoded).view((1, -1))
-outputs = gpt(inputs)
+    encoder = tiktoken.get_encoding("gpt2")
+    encoded = encoder.encode(
+        "Marcus Aurelius said thus: ", allowed_special={"<|endoftext|>"}
+    )
+    inputs = torch.tensor(encoded).view((1, -1))
+    outputs = gpt(inputs)
 
-generated = gpt.generate(inputs, 10).tolist()[0]
-print(encoder.decode(generated))
-
-name_to_tensor = {
-    "gpt_inputs": inputs,
-    "gpt_outputs": outputs,
-}
-for name, tensor in name_to_tensor.items():
-    if not os.path.exists(f"models/test/{name}"):
-        with open(f"models/test/{name}", "wb") as file_:
-            file_.write(tensor.reshape(-1).detach().numpy().tobytes())
+    generated = gpt.generate(inputs, 10).tolist()[0]
+    print(encoder.decode(generated))
