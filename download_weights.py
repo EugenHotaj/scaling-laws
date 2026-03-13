@@ -1,4 +1,7 @@
-"""Downloads GPT-2 weights and converts them into PyTorch-loadable format."""
+"""Downloads GPT-2 weights and converts them into PyTorch-loadable format.
+
+Modified from https://github.com/openai/gpt-2/blob/master/download_model.py.
+"""
 
 import argparse
 import json
