@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 from torch.optim import AdamW
 
-from data_loader import create_data_loader
+from data import create_data_loader
 from model import GPT, tiny_model
 
 

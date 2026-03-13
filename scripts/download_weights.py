@@ -3,9 +3,9 @@
 Modified from https://github.com/openai/gpt-2/blob/master/download_model.py.
 """
 
-import argparse
 import os
 import re
+from argparse import ArgumentParser
 
 import requests
 import tensorflow as tf
@@ -62,7 +62,7 @@ def download_model(model_size: str) -> None:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
+    parser = ArgumentParser()
     parser.add_argument("--model-size", default="124M", choices=("124M", "355M", "774M", "1558M"))
     args = parser.parse_args()
     download_model(args.model_size)

@@ -1,4 +1,3 @@
-import math
 from dataclasses import dataclass
 
 import torch
@@ -47,10 +46,6 @@ class CausalSelfAttention(nn.Module):
         # Fused key, query, value projections.
         self.c_attn = nn.Linear(config.model_dim, 3 * config.model_dim)
         self.c_proj = nn.Linear(config.model_dim, config.model_dim)
-        # Causal mask.
-        bias = torch.tril(torch.ones(config.max_seq_len, config.max_seq_len))
-        bias = bias.view(1, 1, config.max_seq_len, config.max_seq_len)
-        self.register_buffer("softmax_bias", bias, persistent=False)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, T, C = x.size()
@@ -62,11 +57,8 @@ class CausalSelfAttention(nn.Module):
         q = q.view(B, T, self.n_heads, hs).transpose(1, 2)
         v = v.view(B, T, self.n_heads, hs).transpose(1, 2)
 
-        # Attention.
-        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-        att = att.masked_fill(self.softmax_bias[:, :, :T, :T] == 0, float("-inf"))
-        att = F.softmax(att, dim=-1)
-        y = att @ v
+        # PyTorch SDPA handles scaling and causal masking internally.
+        y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
 
         # Reshape (B, nh, T, hs) -> (B, T, C) and compute output projection.
         y = y.transpose(1, 2).contiguous().view(B, T, C)

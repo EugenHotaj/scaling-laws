@@ -1,3 +1,5 @@
+from argparse import ArgumentParser
+
 import torch
 import tiktoken
 import torch.nn.functional as F
@@ -12,20 +14,26 @@ def generate(model: GPT, tokens: torch.Tensor, new_tokens: int, temp=0.6) -> tor
         logits = model(tokens)[:, -1, :] / temp
         probs = F.softmax(logits, dim=-1)
         next_token = torch.multinomial(probs, num_samples=1)
+        yield next_token
         tokens = torch.cat((tokens, next_token), dim=1)
     return tokens
 
 
 if __name__ == '__main__':
+    parser = ArgumentParser()
+    parser.add_argument("--num-tokens", type=int, default=25)
+    args = parser.parse_args()
+
     model = GPT(gpt2_117m).eval()
     state_dict = torch.load("models/124M/model.pt")
     model.load_state_dict(state_dict)
 
-    encoder = tiktoken.get_encoding("gpt2")
-    encoded = encoder.encode(
-        "<|endoftext|>Marcus Aurelius said thus:", allowed_special={"<|endoftext|>"}
-    )
+    tokenizer = tiktoken.get_encoding("gpt2")
+    prompt = "<|endoftext|>Marcus Aurelius said thus:"
+    encoded = tokenizer.encode(prompt, allowed_special={"<|endoftext|>"})
     inputs = torch.tensor(encoded).view((1, -1))
-    generated = generate(model, inputs, 10).tolist()[0]
 
-    print(encoder.decode(generated))
+    print(prompt, end="", flush=True)
+    for token in generate(model, inputs, args.num_tokens):
+        print(tokenizer.decode([token.item()]), end="", flush=True)
+    print()

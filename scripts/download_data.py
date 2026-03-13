@@ -4,7 +4,7 @@ Modified from https://github.com/karpathy/nanochat/blob/master/nanochat/dataset.
 """
 
 import os
-import argparse
+from argparse import ArgumentParser
 from concurrent.futures import ThreadPoolExecutor
 
 import requests
@@ -37,9 +37,9 @@ def download_single_file(index: int) -> bool:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Download pretraining dataset shards")
-    parser.add_argument("-n", "--num-files", type=int, default=MAX_SHARD)
-    parser.add_argument("-w", "--num-workers", type=int, default=4)
+    parser = ArgumentParser(description="Download pretraining dataset shards")
+    parser.add_argument("--num-files", type=int, default=MAX_SHARD)
+    parser.add_argument("--num-workers", type=int, default=4)
     args = parser.parse_args()
 
     # Prepare the output directory
