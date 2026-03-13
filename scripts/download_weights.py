@@ -4,11 +4,9 @@ Modified from https://github.com/openai/gpt-2/blob/master/download_model.py.
 """
 
 import argparse
-import json
 import os
 import re
 
-import numpy as np
 import requests
 import tensorflow as tf
 import torch

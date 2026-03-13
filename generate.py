@@ -2,11 +2,11 @@ import torch
 import tiktoken
 import torch.nn.functional as F
 
-from model import GPT, GPTConfig
+from model import GPT, gpt2_117m
 
 @torch.no_grad()
 def generate(model: GPT, tokens: torch.Tensor, new_tokens: int, temp=0.6) -> torch.Tensor:
-    assert len(tokens) + new_tokens <= model.config.block_size
+    assert len(tokens) + new_tokens <= model.config.max_seq_len
 
     for _ in range(new_tokens):
         logits = model(tokens)[:, -1, :] / temp
@@ -17,8 +17,7 @@ def generate(model: GPT, tokens: torch.Tensor, new_tokens: int, temp=0.6) -> tor
 
 
 if __name__ == '__main__':
-    config = GPTConfig()
-    model = GPT(config).eval()
+    model = GPT(gpt2_117m).eval()
     state_dict = torch.load("models/124M/model.pt")
     model.load_state_dict(state_dict)
 

@@ -10,19 +10,26 @@ from torch.nn import functional as F
 class GPTConfig:
     vocab_size: int = 50257
     max_seq_len: int = 1024
-    n_layer: int = 12
-    n_head: int = 12
-    n_embed: int = 768
+    n_layers: int = 12
+    model_dim: int = 768
+    head_dim: int = 64
 
+# Model sizes pre-trained and released by OpenAI.
+gpt2_117m = GPTConfig()
+gpt2_335m = GPTConfig(n_layers=24, model_dim=1024)
+gpt2_774m = GPTConfig(n_layers=36, model_dim=1280)
+gpt2_1558m = GPTConfig(n_layers=48, model_dim=1600)
 
-tiny_model = GPTConfig(max_seq_len=64, n_layer=2, n_head=2, n_embed=2*16)
+# Custom model sizes.
+tiny_model = GPTConfig(n_layers=2, model_dim=16*2, head_dim=16)
+
 
 class MLP(nn.Module):
     def __init__(self, config: GPTConfig) -> None:
         super().__init__()
-        self.c_fc = nn.Linear(config.n_embed, 4 * config.n_embed)
+        self.c_fc = nn.Linear(config.model_dim, 4 * config.model_dim)
         self.gelu = nn.GELU(approximate="tanh")
-        self.c_proj = nn.Linear(4 * config.n_embed, config.n_embed)
+        self.c_proj = nn.Linear(4 * config.model_dim, config.model_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.c_fc(x)
@@ -34,40 +41,35 @@ class MLP(nn.Module):
 class CausalSelfAttention(nn.Module):
     def __init__(self, config: GPTConfig) -> None:
         super().__init__()
-        assert config.n_embed % config.n_head == 0
-        self.n_head = config.n_head
-        self.n_embed = config.n_embed
-        # Key, query, value projections for all heads, but in a batch.
-        self.c_attn = nn.Linear(config.n_embed, 3 * config.n_embed)
-        # Output projection.
-        self.c_proj = nn.Linear(config.n_embed, config.n_embed)
+        assert config.model_dim % config.head_dim == 0
+        self.n_heads = config.model_dim // config.head_dim
+        self.model_dim = config.model_dim
+        # Fused key, query, value projections.
+        self.c_attn = nn.Linear(config.model_dim, 3 * config.model_dim)
+        self.c_proj = nn.Linear(config.model_dim, config.model_dim)
         # Causal mask.
         bias = torch.tril(torch.ones(config.max_seq_len, config.max_seq_len))
         bias = bias.view(1, 1, config.max_seq_len, config.max_seq_len)
         self.register_buffer("softmax_bias", bias, persistent=False)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Batch size, sequence length, embedding dimensionality (n_embed).
         B, T, C = x.size()
-        hs = C // self.n_head
+        hs = C // self.n_heads
 
-        # Calculate query, key, values for all heads in batch and move head forward to
-        # be the batch dim.
-        q, k, v = self.c_attn(x).split(self.n_embed, dim=2)
-        k = k.view(B, T, self.n_head, hs).transpose(1, 2)  # (B, nh, T, hs)
-        q = q.view(B, T, self.n_head, hs).transpose(1, 2)  # (B, nh, T, hs)
-        v = v.view(B, T, self.n_head, hs).transpose(1, 2)  # (B, nh, T, hs)
+        # Compute k, q, v, split out, and reshape each (B, T, C) -> (B, nh, T, hs)
+        q, k, v = self.c_attn(x).split(self.model_dim, dim=2)
+        k = k.view(B, T, self.n_heads, hs).transpose(1, 2)
+        q = q.view(B, T, self.n_heads, hs).transpose(1, 2)
+        v = v.view(B, T, self.n_heads, hs).transpose(1, 2)
 
-        # Manual implementation of attention.
+        # Attention.
         att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
         att = att.masked_fill(self.softmax_bias[:, :, :T, :T] == 0, float("-inf"))
         att = F.softmax(att, dim=-1)
-        y = att @ v  # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+        y = att @ v
 
-        # Re-assemble all head outputs side by side.
+        # Reshape (B, nh, T, hs) -> (B, T, C) and compute output projection.
         y = y.transpose(1, 2).contiguous().view(B, T, C)
-
-        # Output projection.
         y = self.c_proj(y)
         return y
 
@@ -75,9 +77,9 @@ class CausalSelfAttention(nn.Module):
 class Block(nn.Module):
     def __init__(self, config: GPTConfig) -> None:
         super().__init__()
-        self.ln_1 = nn.LayerNorm(config.n_embed)
+        self.ln_1 = nn.LayerNorm(config.model_dim)
         self.attn = CausalSelfAttention(config)
-        self.ln_2 = nn.LayerNorm(config.n_embed)
+        self.ln_2 = nn.LayerNorm(config.model_dim)
         self.mlp = MLP(config)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -92,12 +94,38 @@ class GPT(nn.Module):
         self.config = config
         self.model = nn.ModuleDict(
             dict(
-                wte=nn.Embedding(config.vocab_size, config.n_embed),
-                wpe=nn.Embedding(config.max_seq_len, config.n_embed),
-                h=nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
-                ln_f=nn.LayerNorm(config.n_embed),
+                wte=nn.Embedding(config.vocab_size, config.model_dim),
+                wpe=nn.Embedding(config.max_seq_len, config.model_dim),
+                h=nn.ModuleList([Block(config) for _ in range(config.n_layers)]),
+                ln_f=nn.LayerNorm(config.model_dim),
             )
         )
+        self._initialize()
+
+    def _initialize(self):
+        """Initializes the full model.
+        
+        Note: Some initializations are redundant with default PyTorch but we do them
+        anyways here for completeness.
+        """
+        def init_layer_norm(layer_norm: nn.LayerNorm) -> None:
+            nn.init.ones_(layer_norm.weight)
+            nn.init.zeros_(layer_norm.bias)
+
+        def init_linear(linear: nn.Linear) -> None:
+            nn.init.normal_(linear.weight, mean=0.0, std=0.002)
+            nn.init.zeros_(linear.bias)
+
+        nn.init.normal_(self.model.wte.weight, mean=0.0, std=0.002)
+        nn.init.normal_(self.model.wpe.weight, mean=0.0, std=0.002)
+        for block in self.model.h:
+            init_linear(block.attn.c_attn)
+            init_linear(block.attn.c_proj)
+            init_linear(block.mlp.c_fc)
+            init_linear(block.mlp.c_proj)
+            init_layer_norm(block.ln_1)
+            init_layer_norm(block.ln_2)
+        init_layer_norm(self.model.ln_f)
 
     @property
     def num_params(self):
