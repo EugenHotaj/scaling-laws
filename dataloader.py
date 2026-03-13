@@ -21,9 +21,7 @@ def _iterate_parquet() -> Iterator[list[str]]:
 def create_data_loader(batch_size: int, seq_len: int) -> Iterator[torch.Tensor]:
     assert batch_size > 0 and seq_len > 0
 
-    # TODO(eugen): Use (seq_len + 1) because inputs / targets will be shifted by 1. However,
-    # this means that we never use the last token as input, does this matter? Probably not?
-    max_tokens = batch_size * (seq_len + 1)
+    max_tokens = batch_size * seq_len + 1  # Use +1 because inputs/targets are shifted.
     tokenizer = tiktoken.get_encoding("gpt2")
     bos_token = tokenizer.eot_token
 
@@ -32,8 +30,8 @@ def create_data_loader(batch_size: int, seq_len: int) -> Iterator[torch.Tensor]:
         # Yield batches of tokens when we have enough capacity.
         while len(token_queue) >= max_tokens:
             tokens = torch.tensor([token_queue.popleft() for _ in range(max_tokens)])
-            tokens = tokens.view(batch_size, seq_len + 1)
-            yield tokens[:, :-1], tokens[:, 1:]
+            x, y = tokens[:-1].view(batch_size, seq_len), tokens[1:].view(batch_size, seq_len)
+            yield x, y
 
         # Tokenize current rows and add them to the queue. For each row we first
         # add the <BOS> token, then we add the tokenized row.
