@@ -33,6 +33,7 @@ def download_single_file(index: int) -> bool:
         for chunk in response.iter_content(chunk_size=1024 * 1024):  # 1MB chunks
             if chunk:
                 f.write(chunk)
+    
 
 
 if __name__ == "__main__":

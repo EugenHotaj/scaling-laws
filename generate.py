@@ -24,7 +24,7 @@ if __name__ == '__main__':
 
     encoder = tiktoken.get_encoding("gpt2")
     encoded = encoder.encode(
-        "Marcus Aurelius said thus:", allowed_special={"<|endoftext|>"}
+        "<|endoftext|>Marcus Aurelius said thus:", allowed_special={"<|endoftext|>"}
     )
     inputs = torch.tensor(encoded).view((1, -1))
     generated = generate(model, inputs, 10).tolist()[0]
