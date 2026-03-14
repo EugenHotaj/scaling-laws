@@ -37,30 +37,30 @@ class MLP(nn.Module):
         return x
 
 
-class CausalSelfAttention(nn.Module):
+class Attention(nn.Module):
     def __init__(self, config: GPTConfig) -> None:
         super().__init__()
         assert config.model_dim % config.head_dim == 0
         self.n_heads = config.model_dim // config.head_dim
         self.model_dim = config.model_dim
+        self.head_dim = config.head_dim
         # Fused key, query, value projections.
         self.c_attn = nn.Linear(config.model_dim, 3 * config.model_dim)
         self.c_proj = nn.Linear(config.model_dim, config.model_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, T, C = x.size()
-        hs = C // self.n_heads
 
-        # Compute k, q, v, split out, and reshape each (B, T, C) -> (B, nh, T, hs)
+        # Compute k, q, v, split out, and reshape each (B, T, C) -> (B, n_heads, T, head_dim).
         q, k, v = self.c_attn(x).split(self.model_dim, dim=2)
-        k = k.view(B, T, self.n_heads, hs).transpose(1, 2)
-        q = q.view(B, T, self.n_heads, hs).transpose(1, 2)
-        v = v.view(B, T, self.n_heads, hs).transpose(1, 2)
+        k = k.view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
+        q = q.view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
+        v = v.view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
 
-        # PyTorch SDPA handles scaling and causal masking internally.
+        # Attention.
         y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
 
-        # Reshape (B, nh, T, hs) -> (B, T, C) and compute output projection.
+        # Reshape (B, n_heads, T, head_dims) -> (B, T, C) and compute output projection.
         y = y.transpose(1, 2).contiguous().view(B, T, C)
         y = self.c_proj(y)
         return y
@@ -70,7 +70,7 @@ class Block(nn.Module):
     def __init__(self, config: GPTConfig) -> None:
         super().__init__()
         self.ln_1 = nn.LayerNorm(config.model_dim)
-        self.attn = CausalSelfAttention(config)
+        self.attn = Attention(config)
         self.ln_2 = nn.LayerNorm(config.model_dim)
         self.mlp = MLP(config)
 
@@ -100,16 +100,18 @@ class GPT(nn.Module):
         Note: Some initializations are redundant with default PyTorch but we do them
         anyways here for completeness.
         """
+        init_std = 0.002
+
         def init_layer_norm(layer_norm: nn.LayerNorm) -> None:
             nn.init.ones_(layer_norm.weight)
             nn.init.zeros_(layer_norm.bias)
 
         def init_linear(linear: nn.Linear) -> None:
-            nn.init.normal_(linear.weight, mean=0.0, std=0.002)
+            nn.init.normal_(linear.weight, mean=0.0, std=init_std)
             nn.init.zeros_(linear.bias)
 
-        nn.init.normal_(self.model.wte.weight, mean=0.0, std=0.002)
-        nn.init.normal_(self.model.wpe.weight, mean=0.0, std=0.002)
+        nn.init.normal_(self.model.wte.weight, mean=0.0, std=init_std)
+        nn.init.normal_(self.model.wpe.weight, mean=0.0, std=init_std)
         for block in self.model.h:
             init_linear(block.attn.c_attn)
             init_linear(block.attn.c_proj)
