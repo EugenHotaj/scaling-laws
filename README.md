@@ -6,7 +6,6 @@ Tested on A100 [Runpod](https://www.runpod.io) GPUs with the official `autoresea
 
 Setup the environment.
 ```bash
-uv init --python 3.13
 uv sync
 source .venv/bin/activate
 ```

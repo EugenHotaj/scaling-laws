@@ -20,7 +20,8 @@ gpt2_774m = GPTConfig(n_layers=36, model_dim=1280)
 gpt2_1558m = GPTConfig(n_layers=48, model_dim=1600)
 
 # Custom model sizes.
-tiny_model = GPTConfig(max_seq_len=512, n_layers=6, model_dim=384)
+cpu_model = GPTConfig(max_seq_len=512, n_layers=2, head_dim=16, model_dim=4*16)
+tiny_model = GPTConfig(n_layers=6, model_dim=384)
 
 
 class MLP(nn.Module):
