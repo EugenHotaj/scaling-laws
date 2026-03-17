@@ -20,7 +20,7 @@ gpt2_774m = GPTConfig(n_layers=36, model_dim=1280)
 gpt2_1558m = GPTConfig(n_layers=48, model_dim=1600)
 
 # Custom model sizes.
-tiny_model = GPTConfig(n_layers=2, model_dim=16*2, head_dim=16)
+tiny_model = GPTConfig(max_seq_len=512, n_layers=6, model_dim=384)
 
 
 class MLP(nn.Module):
@@ -122,8 +122,10 @@ class GPT(nn.Module):
         init_layer_norm(self.model.ln_f)
 
     @property
-    def num_params(self):
-        return sum(p.numel() for p in self.parameters())
+    def num_params(self) -> tuple[int, int, int]:
+        n_total = sum(p.numel() for p in self.parameters()) 
+        n_embed = (self.config.vocab_size + self.config.max_seq_len) * self.config.model_dim
+        return n_total, n_total - n_embed, n_embed
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         _, t = x.size()
