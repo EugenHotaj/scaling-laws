@@ -19,8 +19,9 @@ def train(
 ) -> None:
     seq_len = gpt_config.max_seq_len
     vocab_size = gpt_config.vocab_size
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     
-    model = GPT(gpt_config)
+    model = GPT(gpt_config).to(device=device)
     optim = AdamW(model.parameters(), lr=3e-4)
     data_loader = create_data_loader(batch_size, seq_len)
 
@@ -28,6 +29,7 @@ def train(
     print(f"Training {n_body / M:.2f}M (+{n_emb/ M:.2f}M emb) paramter model.")
     start_ts = time.monotonic()
     for i, (x, y) in enumerate(data_loader):
+        x, y = x.to(device=device), y.to(device=device)
         if i >= n_steps:
             break
 

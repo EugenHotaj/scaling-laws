@@ -24,14 +24,16 @@ if __name__ == '__main__':
     parser.add_argument("--num-tokens", type=int, default=25)
     args = parser.parse_args()
 
-    model = GPT(gpt2_117m).eval()
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    model = GPT(gpt2_117m).to(device=device).eval()
     state_dict = torch.load("models/124M/model.pt")
     model.load_state_dict(state_dict)
 
     tokenizer = tiktoken.get_encoding("gpt2")
     prompt = "<|endoftext|>Marcus Aurelius said thus:"
     encoded = tokenizer.encode(prompt, allowed_special={"<|endoftext|>"})
-    inputs = torch.tensor(encoded).view((1, -1))
+    inputs = torch.tensor(encoded, device=device).view((1, -1))
 
     print(prompt, end="", flush=True)
     for token in generate(model, inputs, args.num_tokens):
