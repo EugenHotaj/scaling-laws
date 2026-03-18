@@ -61,7 +61,7 @@ def train(
     n_warmup_steps: int,
     n_steps: int,
     clip_grad_norm: float = 1.0,
-    save_every_n_steps: int = 1000,
+    save_every_n_steps: int = 5,
 ) -> None:
     torch.manual_seed(42)
     seq_len = gpt_config.max_seq_len
@@ -94,35 +94,10 @@ def train(
     )
 
     metrics = []
-    start_ts = time.perf_counter()
-    for step, (x, y) in enumerate(data_loader):
-        if step >= n_steps:
-            break
-
-        # Train single step (with gradient accumulation).
-        loss = 0.0
-        for i in range(gradient_accumulation_steps):
-            x, y = x.to(device=device), y.to(device=device)
-            step_loss = _compiled_fwdbwd(model, x, y, vocab_size, gradient_accumulation_steps)
-            loss += step_loss.item()
-        norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip_grad_norm).item()
-        optim.step()
-        optim.zero_grad(set_to_none=True)
-        lr_scheduler.step()
-        torch.cuda.synchronize()
-        step_time = time.perf_counter() - start_ts
-
-        # Log metrics.
-        lr = lr_scheduler.get_last_lr()[0]
-        tps = toks_per_batch / step_time / M
-        peak_mem = 0.0
-        if torch.cuda.is_available():
-            peak_mem = torch.cuda.max_memory_allocated() / GiB
-            torch.cuda.reset_peak_memory_stats()
-        metrics.append({"step": step, "loss": loss, "norm": norm, "lr": lr, "tps": tps, "peak_mem": peak_mem})
-        print(f"[{step:5}] loss={loss:.2f}|norm={norm:.3f}|lr={lr:.3e}|tps={tps:.3f}M|pm={peak_mem:.2f}G")
-
-        if (step + 1) % save_every_n_steps == 0 or (step + 1) == n_steps:
+    for step in range(n_steps + 1):
+       # Periodically flush metrics, evaluate, sample, and dump checkpoint.
+       # We do this before the train step to ensure exactly save_every_n_steps were taken. 
+        if (step > 0 and step  % save_every_n_steps == 0) or step == n_steps:
             # Flush training metrics.
             print(f"Evaluating and saving checkpoint at step {step}.")
             os.makedirs(checkpoint_dir, exist_ok=True)
@@ -148,9 +123,36 @@ def train(
             checkpoint_path = f"{checkpoint_dir}/step_{step}.pt"
             print(f"Saving checkpoint to {checkpoint_path}.")
             torch.save(model._orig_mod.state_dict(), checkpoint_path)
+        
+            # Break so we don't unnecessarily do an extra train step if we're done.
+            if step == n_steps:
+                break
 
+        # Train single step (with gradient accumulation).
         start_ts = time.perf_counter()
+        loss = 0.0
+        for i in range(gradient_accumulation_steps):
+            x, y = next(data_loader)
+            x, y = x.to(device=device), y.to(device=device)
+            step_loss = _compiled_fwdbwd(model, x, y, vocab_size, gradient_accumulation_steps)
+            loss += step_loss.item()
+        norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip_grad_norm).item()
+        optim.step()
+        optim.zero_grad(set_to_none=True)
+        lr_scheduler.step()
+        torch.cuda.synchronize()
+        step_time = time.perf_counter() - start_ts
 
+        # Log metrics.
+        lr = lr_scheduler.get_last_lr()[0]
+        tps = toks_per_batch / step_time / M
+        peak_mem = 0.0
+        if torch.cuda.is_available():
+            peak_mem = torch.cuda.max_memory_allocated() / GiB
+            torch.cuda.reset_peak_memory_stats()
+        metrics.append({"step": step, "loss": loss, "norm": norm, "lr": lr, "tps": tps, "peak_mem": peak_mem})
+        print(f"[{step:5}] loss={loss:.2f}|norm={norm:.3f}|lr={lr:.3e}|tps={tps:.3f}M|pm={peak_mem:.2f}G")
+ 
 
 if __name__ == "__main__":
     # Default arguments are set to reproduce gpt124M by training for ~10B tokens.
@@ -160,7 +162,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--bs", type=int, default=128, help="Batch size (defaults to 128).")
     parser.add_argument("--gas", type=int, default=4, help="Gradient accumulation steps (defaults to 4).")
-    parser.add_argument("--warmup-steps", type=int, default=250, help="Number of LR warmup steps.")
+    parser.add_argument("--warmup-steps", type=int, default=716, help="Number of LR warmup steps.")
     parser.add_argument("--steps", type=int, default=19074, help="Number of training steps.")
     args = parser.parse_args()
 
