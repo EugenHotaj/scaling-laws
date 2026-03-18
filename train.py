@@ -8,10 +8,13 @@ import torch.nn.functional as F
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
 from torch.nn.parameter import Parameter
+from tqdm import tqdm
 
 from scaling_laws.data import create_data_loader
 from scaling_laws.model import GPT, GPTConfig, gpt2_124m
-from scaling_laws.utils import get_device_and_dtype
+from scaling_laws.utils import (
+    append_to_jsonl, generate, get_device_and_dtype, valid_nll 
+)
 
 
 M = 10 ** 6
@@ -51,6 +54,7 @@ def _compiled_fwdbwd(
 
 
 def train(
+    name: str,
     gpt_config: GPTConfig,
     batch_size: int,
     gradient_accumulation_steps: int,
@@ -63,7 +67,7 @@ def train(
     seq_len = gpt_config.max_seq_len
     vocab_size = gpt_config.vocab_size
     device, dtype = get_device_and_dtype()
-    checkpoint_dir = "models/custom_124M"
+    checkpoint_dir = f"models/{name}"
     
     # Create data loader, model, optim, scheduler.
     data_loader = create_data_loader(batch_size, seq_len)
@@ -71,9 +75,12 @@ def train(
     model = torch.compile(
         model, dynamic=False, fullgraph=True, options={"triton.cudagraphs": True, "shape_padding": True}
     )
-    optim = AdamW(
-        model.parameters(), lr=6e-4, betas=(0.9, 0.95), weight_decay=0.1, eps=1e-8, fused=True
-    )
+    # Only apply weight decay to 2d weight tensors only.
+    optim_groups = [
+        {"params": [p for p in model.parameters() if p.dim() >= 2], "weight_decay": 0.1},
+        {"params": [p for p in model.parameters() if p.dim() < 2], "weight_decay": 0.0},
+    ]
+    optim = AdamW(optim_groups, lr=6e-4, betas=(0.9, 0.95), eps=1e-8, fused=True)
     lr_scheduler = create_lr_scheduler(optim, n_warmup_steps, n_steps, min_lr_factor=0.1)
 
     # Print out training config.
@@ -86,7 +93,8 @@ def train(
         f"  Batch size: {global_batch_size} ({toks_per_batch / M:.2f}M tokens)"
     )
 
-    start_ts = time.monotonic()
+    metrics = []
+    start_ts = time.perf_counter()
     for step, (x, y) in enumerate(data_loader):
         if step >= n_steps:
             break
@@ -97,12 +105,12 @@ def train(
             x, y = x.to(device=device), y.to(device=device)
             step_loss = _compiled_fwdbwd(model, x, y, vocab_size, gradient_accumulation_steps)
             loss += step_loss.item()
-        norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip_grad_norm)
+        norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip_grad_norm).item()
         optim.step()
         optim.zero_grad(set_to_none=True)
         lr_scheduler.step()
         torch.cuda.synchronize()
-        step_time = time.monotonic() - start_ts
+        step_time = time.perf_counter() - start_ts
 
         # Log metrics.
         lr = lr_scheduler.get_last_lr()[0]
@@ -111,21 +119,45 @@ def train(
         if torch.cuda.is_available():
             peak_mem = torch.cuda.max_memory_allocated() / GiB
             torch.cuda.reset_peak_memory_stats()
+        metrics.append({"step": step, "loss": loss, "norm": norm, "lr": lr, "tps": tps, "peak_mem": peak_mem})
         print(f"[{step:5}] loss={loss:.2f}|norm={norm:.3f}|lr={lr:.3e}|tps={tps:.3f}M|pm={peak_mem:.2f}G")
 
-        # Save checkpoint.
         if (step + 1) % save_every_n_steps == 0 or (step + 1) == n_steps:
-            checkpoint_path = f"{checkpoint_dir}/step_{step + 1}.pt"
-            print(f"Saving checkpoint to {checkpoint_path}.")
+            # Flush training metrics.
+            print(f"Evaluating and saving checkpoint at step {step}.")
             os.makedirs(checkpoint_dir, exist_ok=True)
+            append_to_jsonl(metrics, f"{checkpoint_dir}/metrics_train.jsonl")
+            metrics = []
+
+            # Estimate NLL on the validation split.
+            valid_loss = valid_nll(model, batch_size=128)
+            print(f"valid_nll@{step}: {valid_loss}")
+
+            # Sample a few tokens from the current checkpoint.
+            prompt = "<|endoftext|>Marcus Aurelius said thus:"
+            # NOTE: Use the original, uncompiled model for generations since the sequence length changes.
+            generation = list(tqdm(generate(model._orig_mod, prompt, new_tokens=128), desc="Sampling", total=128))
+            generation = ''.join(generation)
+            print(f"sample@{step}: {prompt}{generation}")
+
+            # Flush validation metrics.
+            valid_metrics = {"step": step, "loss": valid_loss, "prompt": prompt, "generation": generation}
+            append_to_jsonl([valid_metrics], f"{checkpoint_dir}/metrics_valid.jsonl")
+
+            # Dump checkpoint.
+            checkpoint_path = f"{checkpoint_dir}/step_{step}.pt"
+            print(f"Saving checkpoint to {checkpoint_path}.")
             torch.save(model._orig_mod.state_dict(), checkpoint_path)
 
-        start_ts = time.monotonic()
+        start_ts = time.perf_counter()
 
 
 if __name__ == "__main__":
-    # Default arguments are set to reproduce gpt124M by training for 10B tokens.
+    # Default arguments are set to reproduce gpt124M by training for ~10B tokens.
     parser = ArgumentParser()
+    parser.add_argument(
+        "--name", type=str, help="Run name. Checkpoints and metrics will be saved to models/<run-name>/."
+    )
     parser.add_argument("--bs", type=int, default=128, help="Batch size (defaults to 128).")
     parser.add_argument("--gas", type=int, default=4, help="Gradient accumulation steps (defaults to 4).")
     parser.add_argument("--warmup-steps", type=int, default=250, help="Number of LR warmup steps.")
@@ -133,6 +165,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     train(
+        name=args.name,
         gpt_config=gpt2_124m, 
         batch_size=args.bs, 
         gradient_accumulation_steps=args.gas,
