@@ -7,26 +7,30 @@ import tiktoken
 import torch
 
 
-def _iterate_parquet() -> Iterator[list[str]]:
+def _iterate_parquet(split: str) -> Iterator[list[str]]:
     data_dir = Path("data")
     parquet_files = sorted(data_dir.glob("*.parquet"))
+    parquet_files = parquet_files[:-1] if split == "train" else parquet_files[-1:]
 
-    for parquet_file in parquet_files[:-1]:
+    for parquet_file in parquet_files:
         pf = pq.ParquetFile(parquet_file)
         for rg_idx in range(pf.num_row_groups):
             rg = pf.read_row_group(rg_idx)
             yield rg.column("text").to_pylist()
 
 
-def create_data_loader(batch_size: int, seq_len: int) -> Iterator[torch.Tensor]:
+def create_data_loader(
+    batch_size: int, seq_len: int, split: str = "train"
+) -> Iterator[torch.Tensor]:
     assert batch_size > 0 and seq_len > 0
+    assert split in ("train", "valid")
 
     max_tokens = batch_size * seq_len + 1  # Use +1 because inputs/targets are shifted.
     tokenizer = tiktoken.get_encoding("gpt2")
     bos_token = tokenizer.eot_token
 
     token_queue = deque()
-    for rows in _iterate_parquet():
+    for rows in _iterate_parquet(split):
         # Yield batches of tokens when we have enough capacity.
         while len(token_queue) >= max_tokens:
             tokens = torch.tensor([token_queue.popleft() for _ in range(max_tokens)])
