@@ -55,6 +55,7 @@ def train(
     n_warmup_steps: int,
     n_steps: int,
     clip_grad_norm: float = 1.0,
+    save_every_n: int = 1000,
 ) -> None:
     torch.manual_seed(42)
 
@@ -84,12 +85,12 @@ def train(
         f"  Batch size: {global_batch_size} ({toks_per_batch / M:.2f}M tokens)"
     )
 
-    # Train.
     start_ts = time.monotonic()
     for step, (x, y) in enumerate(data_loader):
         if step >= n_steps:
             break
 
+        # Train single step (with gradient accumulation).
         loss = 0.0
         for i in range(gradient_accumulation_steps):
             x, y = x.to(device=device), y.to(device=device)
@@ -102,6 +103,7 @@ def train(
         torch.cuda.synchronize()
         step_time = time.monotonic() - start_ts
 
+        # Log metrics.
         lr = lr_scheduler.get_last_lr()[0]
         tps = toks_per_batch / step_time / M
         peak_mem = 0.0
