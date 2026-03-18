@@ -61,7 +61,7 @@ def train(
     n_warmup_steps: int,
     n_steps: int,
     clip_grad_norm: float = 1.0,
-    save_every_n_steps: int = 5,
+    save_every_n_steps: int = 1000,
 ) -> None:
     torch.manual_seed(42)
     seq_len = gpt_config.max_seq_len
