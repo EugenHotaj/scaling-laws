@@ -50,11 +50,11 @@ def _compiled_fwdbwd(
 
 def train(
     gpt_config: GPTConfig,
+    batch_size: int,
+    gradient_accumulation_steps: int,
+    n_warmup_steps: int,
+    n_steps: int,
     clip_grad_norm: float = 1.0,
-    batch_size: int = 8,
-    gradient_accumulation_steps: int = 1,
-    n_warmup_steps: int = 10,
-    n_steps: int = 100,
 ) -> None:
     torch.manual_seed(42)
 
@@ -108,14 +108,23 @@ def train(
         if torch.cuda.is_available():
             peak_mem = torch.cuda.max_memory_allocated() / GiB
             torch.cuda.reset_peak_memory_stats()
-        print(f"[{step}] loss={loss:.2f}|norm={norm:.3f}|lr={lr:.3}|tps={tps:.3f}M|pm={peak_mem:.2f}G")
+        print(f"[{step:5}] loss={loss:.2f}|norm={norm:.3f}|lr={lr:.3e}|tps={tps:.3f}M|pm={peak_mem:.2f}G")
         start_ts = time.monotonic()
     
 
 if __name__ == "__main__":
+    # Default arguments are set to reproduce gpt124M by training for 10B tokens.
     parser = ArgumentParser()
-    parser.add_argument("--bs", type=int, default=8, help="Batch size (defaults to 8).")
-    parser.add_argument("--gas", type=int, default=1, help="Gradient accumulation steps (defaults to 1).")
+    parser.add_argument("--bs", type=int, default=128, help="Batch size (defaults to 128).")
+    parser.add_argument("--gas", type=int, default=4, help="Gradient accumulation steps (defaults to 4).")
+    parser.add_argument("--warmup-steps", type=int, default=250, help="Number of LR warmup steps.")
+    parser.add_argument("--steps", type=int, default=19074, help="Number of training steps.")
     args = parser.parse_args()
 
-    train(gpt2_124m, batch_size=args.bs, gradient_accumulation_steps=args.gas)
+    train(
+        gpt_config=gpt2_124m, 
+        batch_size=args.bs, 
+        gradient_accumulation_steps=args.gas,
+        n_warmup_steps=args.warmup_steps,
+        n_steps=args.steps,
+    )
