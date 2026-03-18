@@ -1,4 +1,5 @@
 import math
+import os
 import time
 from argparse import ArgumentParser
 
@@ -56,12 +57,13 @@ def train(
     n_warmup_steps: int,
     n_steps: int,
     clip_grad_norm: float = 1.0,
-    save_every_n: int = 1000,
+    save_every_n_steps: int = 1000,
 ) -> None:
     torch.manual_seed(42)
     seq_len = gpt_config.max_seq_len
     vocab_size = gpt_config.vocab_size
     device, dtype = get_device_and_dtype()
+    checkpoint_dir = "models/custom_124M"
     
     # Create data loader, model, optim, scheduler.
     data_loader = create_data_loader(batch_size, seq_len)
@@ -110,8 +112,16 @@ def train(
             peak_mem = torch.cuda.max_memory_allocated() / GiB
             torch.cuda.reset_peak_memory_stats()
         print(f"[{step:5}] loss={loss:.2f}|norm={norm:.3f}|lr={lr:.3e}|tps={tps:.3f}M|pm={peak_mem:.2f}G")
+
+        # Save checkpoint.
+        if (step + 1) % save_every_n_steps == 0 or (step + 1) == n_steps:
+            checkpoint_path = f"{checkpoint_dir}/step_{step + 1}.pt"
+            print(f"Saving checkpoint to {checkpoint_path}.")
+            os.makedirs(checkpoint_dir, exist_ok=True)
+            torch.save(model._orig_mod.state_dict(), checkpoint_path)
+
         start_ts = time.monotonic()
-    
+
 
 if __name__ == "__main__":
     # Default arguments are set to reproduce gpt124M by training for 10B tokens.
