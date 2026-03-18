@@ -14,14 +14,13 @@ class GPTConfig:
     head_dim: int = 64
 
 # Model sizes pre-trained and released by OpenAI.
-gpt2_117m = GPTConfig()
+gpt2_124m = GPTConfig()
 gpt2_335m = GPTConfig(n_layers=24, model_dim=1024)
 gpt2_774m = GPTConfig(n_layers=36, model_dim=1280)
 gpt2_1558m = GPTConfig(n_layers=48, model_dim=1600)
 
 # Custom model sizes.
 cpu_model = GPTConfig(max_seq_len=512, n_layers=2, head_dim=16, model_dim=4*16)
-tiny_model = GPTConfig(n_layers=6, model_dim=384)
 
 
 class MLP(nn.Module):

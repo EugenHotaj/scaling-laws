@@ -1,20 +1,39 @@
+import math
 import time
 from argparse import ArgumentParser
 
 import torch
 import torch.nn.functional as F
 from torch.optim import AdamW
+from torch.optim.lr_scheduler import LambdaLR
 from torch.nn.parameter import Parameter
 
 from data import create_data_loader
-from model import GPT, GPTConfig, tiny_model
+from model import GPT, GPTConfig, gpt2_124m
 
 
 M = 1_000_000
 GiB = 2 ** 30
 
 
-@torch.compile()
+def create_lr_scheduler(
+    optim: AdamW, warmup_steps: int, total_steps: int, min_lr_factor: float
+) -> float:
+    decay_steps = total_steps - warmup_steps
+
+    def cosine_decay_with_warmup(step: int) -> float:
+        if step < warmup_steps:
+            return (step + 1) / warmup_steps 
+        else:
+            progress = float(step - warmup_steps) / decay_steps
+            adjustment = 0.5 * (1.0 + math.cos(math.pi * progress))
+            adjustment = min_lr_factor + (1 - min_lr_factor) * adjustment 
+            return adjustment
+
+    return LambdaLR(optim, cosine_decay_with_warmup)
+
+
+@torch.compile(dynamic=False, options={"shape_padding": True})
 def _compiled_fwdbwd(
     model: GPT, 
     x: torch.Tensor, 
@@ -23,20 +42,10 @@ def _compiled_fwdbwd(
     gradient_accumulation_steps: int,
 ) -> torch.Tensor:
     logits = model(x)
-    loss = F.cross_entropy(logits.view(-1, vocab_size), y.view(-1))
+    loss = F.cross_entropy(logits.view(-1, vocab_size).float(), y.view(-1))
     loss = loss / gradient_accumulation_steps
     loss.backward()
     return loss
-
-
-# TODO(eugen): May not be helpful split out from the fwd/bwd like this, need to investigate.
-@torch.compile()
-def _compiled_optim_step(optim: AdamW, params: list[Parameter], max_norm: float) -> float:
-    unclipped_norm = None
-    unclipped_norm = torch.nn.utils.clip_grad_norm_(params, max_norm=max_norm)
-    optim.step()
-    optim.zero_grad(set_to_none=True)
-    return unclipped_norm
 
 
 def train(
@@ -44,17 +53,26 @@ def train(
     clip_grad_norm: float = 1.0,
     batch_size: int = 8,
     gradient_accumulation_steps: int = 1,
+    n_warmup_steps: int = 10,
     n_steps: int = 100,
 ) -> None:
+    torch.manual_seed(42)
+
     seq_len = gpt_config.max_seq_len
     vocab_size = gpt_config.vocab_size
     device = "cuda" if torch.cuda.is_available() else "cpu"
     dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
     
-    # Create data loader, model, optim.
+    # Create data loader, model, optim, scheduler.
     data_loader = create_data_loader(batch_size, seq_len)
     model = GPT(gpt_config).to(device=device, dtype=dtype)
-    optim = AdamW(model.parameters(), lr=3e-4)
+    model = torch.compile(
+        model, dynamic=False, fullgraph=True, options={"triton.cudagraphs": True, "shape_padding": True}
+    )
+    optim = AdamW(
+        model.parameters(), lr=6e-4, betas=(0.9, 0.95), weight_decay=0.1, eps=1e-8, fused=True
+    )
+    lr_scheduler = create_lr_scheduler(optim, n_warmup_steps, n_steps, min_lr_factor=0.1)
 
     # Print out training config.
     _, n_body, n_emb = model.num_params
@@ -72,21 +90,25 @@ def train(
         if step >= n_steps:
             break
 
-        loss, norm = 0.0, 0.0
+        loss = 0.0
         for i in range(gradient_accumulation_steps):
             x, y = x.to(device=device), y.to(device=device)
             step_loss = _compiled_fwdbwd(model, x, y, vocab_size, gradient_accumulation_steps)
             loss += step_loss.item()
-            if i == gradient_accumulation_steps - 1:
-                norm = _compiled_optim_step(optim, model.parameters(), clip_grad_norm)
-
+        norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip_grad_norm)
+        optim.step()
+        optim.zero_grad(set_to_none=True)
+        lr_scheduler.step()
+        torch.cuda.synchronize()
         step_time = time.monotonic() - start_ts
+
+        lr = lr_scheduler.get_last_lr()[0]
         tps = toks_per_batch / step_time / M
         peak_mem = 0.0
         if torch.cuda.is_available():
             peak_mem = torch.cuda.max_memory_allocated() / GiB
             torch.cuda.reset_peak_memory_stats()
-        print(f"[{step}] loss={loss:.2f}|norm={norm:.2f}|tps={tps:.2f}M|pm={peak_mem:.2f}G")
+        print(f"[{step}] loss={loss:.2f}|norm={norm:.3f}|lr={lr:.3}|tps={tps:.3f}M|pm={peak_mem:.2f}G")
         start_ts = time.monotonic()
     
 
@@ -96,4 +118,4 @@ if __name__ == "__main__":
     parser.add_argument("--gas", type=int, default=1, help="Gradient accumulation steps (defaults to 1).")
     args = parser.parse_args()
 
-    train(tiny_model, batch_size=args.bs, gradient_accumulation_steps=args.gas)
+    train(gpt2_124m, batch_size=args.bs, gradient_accumulation_steps=args.gas)

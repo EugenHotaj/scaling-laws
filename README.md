@@ -20,12 +20,30 @@ Verify that the model weights / implementation are correct.
 python generate.py --num-tokens 20
 ```
 
-Download data.
+### Training
+
+Before we can train, we need to download our pre-training dataset. 
+We use Karpathy's [`climbmix-400b-shuffle`](https://huggingface.co/datasets/karpathy/climbmix-400b-shuffle) which can be
+downloaded locally with:
 ```bash
 python scripts/download_data.py --num-files 1
 ```
 
-Train.
+Now we can kick off training:
 ```bash
 python train.py
 ```
+
+
+### Evaluation
+
+Once we've trained a checkpoint, we can run evaluations with:
+```
+python eval.py
+```
+
+Here are the training run results
+
+| Model | Validation NLL |
+|----------|----------|
+| GPT-2 (124M)   | ~3.20  | 

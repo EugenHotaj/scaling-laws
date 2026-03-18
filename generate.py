@@ -4,7 +4,7 @@ import torch
 import tiktoken
 import torch.nn.functional as F
 
-from model import GPT, gpt2_117m
+from model import GPT, gpt2_124m
 
 @torch.no_grad()
 def generate(model: GPT, tokens: torch.Tensor, new_tokens: int, temp=0.6) -> torch.Tensor:
@@ -26,7 +26,7 @@ if __name__ == '__main__':
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    model = GPT(gpt2_117m).to(device=device).eval()
+    model = GPT(gpt2_124m).to(device=device).eval()
     state_dict = torch.load("models/124M/model.pt")
     model.load_state_dict(state_dict)
 
