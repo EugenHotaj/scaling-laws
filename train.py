@@ -8,17 +8,18 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
 from torch.nn.parameter import Parameter
 
-from data import create_data_loader
-from model import GPT, GPTConfig, gpt2_124m
+from scaling_laws.data import create_data_loader
+from scaling_laws.model import GPT, GPTConfig, gpt2_124m
+from scaling_laws.utils import get_device_and_dtype
 
 
-M = 1_000_000
+M = 10 ** 6
 GiB = 2 ** 30
 
 
 def create_lr_scheduler(
     optim: AdamW, warmup_steps: int, total_steps: int, min_lr_factor: float
-) -> float:
+) -> LambdaLR:
     decay_steps = total_steps - warmup_steps
 
     def cosine_decay_with_warmup(step: int) -> float:
@@ -58,11 +59,9 @@ def train(
     save_every_n: int = 1000,
 ) -> None:
     torch.manual_seed(42)
-
     seq_len = gpt_config.max_seq_len
     vocab_size = gpt_config.vocab_size
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
+    device, dtype = get_device_and_dtype()
     
     # Create data loader, model, optim, scheduler.
     data_loader = create_data_loader(batch_size, seq_len)

@@ -26,14 +26,14 @@ Before we can train, we need to download our pre-training dataset.
 We use Karpathy's [`climbmix-400b-shuffle`](https://huggingface.co/datasets/karpathy/climbmix-400b-shuffle) which can be
 downloaded locally with:
 ```bash
-python scripts/download_data.py --num-files 1
+python scripts/download_data.py --num-files 250 
 ```
 
+The script above will download ~12B training tokens (of which we will use ~10B) plus the ~50M token validation shard. 
 Now we can kick off training:
 ```bash
 python train.py
 ```
-
 
 ### Evaluation
 
