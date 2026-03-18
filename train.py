@@ -94,40 +94,7 @@ def train(
     )
 
     metrics = []
-    for step in range(n_steps + 1):
-       # Periodically flush metrics, evaluate, sample, and dump checkpoint.
-       # We do this before the train step to ensure exactly save_every_n_steps were taken. 
-        if (step > 0 and step  % save_every_n_steps == 0) or step == n_steps:
-            # Flush training metrics.
-            print(f"Evaluating and saving checkpoint at step {step}.")
-            os.makedirs(checkpoint_dir, exist_ok=True)
-            append_to_jsonl(metrics, f"{checkpoint_dir}/metrics_train.jsonl")
-            metrics = []
-
-            # Estimate NLL on the validation split.
-            valid_loss = valid_nll(model, batch_size=128)
-            print(f"valid_nll@{step}: {valid_loss}")
-
-            # Sample a few tokens from the current checkpoint.
-            prompt = "<|endoftext|>Marcus Aurelius said thus:"
-            # NOTE: Use the original, uncompiled model for generations since the sequence length changes.
-            generation = list(tqdm(generate(model._orig_mod, prompt, new_tokens=128), desc="Sampling", total=128))
-            generation = ''.join(generation)
-            print(f"sample@{step}: {prompt}{generation}")
-
-            # Flush validation metrics.
-            valid_metrics = {"step": step, "loss": valid_loss, "prompt": prompt, "generation": generation}
-            append_to_jsonl([valid_metrics], f"{checkpoint_dir}/metrics_valid.jsonl")
-
-            # Dump checkpoint.
-            checkpoint_path = f"{checkpoint_dir}/step_{step}.pt"
-            print(f"Saving checkpoint to {checkpoint_path}.")
-            torch.save(model._orig_mod.state_dict(), checkpoint_path)
-        
-            # Break so we don't unnecessarily do an extra train step if we're done.
-            if step == n_steps:
-                break
-
+    for step in range(n_steps):
         # Train single step (with gradient accumulation).
         start_ts = time.perf_counter()
         loss = 0.0
@@ -153,6 +120,35 @@ def train(
         metrics.append({"step": step, "loss": loss, "norm": norm, "lr": lr, "tps": tps, "peak_mem": peak_mem})
         print(f"[{step:5}] loss={loss:.2f}|norm={norm:.3f}|lr={lr:.3e}|tps={tps:.3f}M|pm={peak_mem:.2f}G")
  
+        # Periodically flush metrics, evaluate, sample, and dump checkpoint.
+        step += 1
+        if step % save_every_n_steps == 0 or step == n_steps:
+            # Flush training metrics.
+            print(f"Evaluating and saving checkpoint at step {step}.")
+            os.makedirs(checkpoint_dir, exist_ok=True)
+            append_to_jsonl(metrics, f"{checkpoint_dir}/metrics_train.jsonl")
+            metrics = []
+
+            # Estimate NLL on the validation split.
+            valid_loss = valid_nll(model, batch_size=128)
+            print(f"valid_nll@{step}: {valid_loss}")
+
+            # Sample a few tokens from the current checkpoint.
+            prompt = "<|endoftext|>Marcus Aurelius said thus:"
+            # NOTE: Use the original, uncompiled model for generations since the sequence length changes.
+            generation = list(tqdm(generate(model._orig_mod, prompt, new_tokens=128), desc="Sampling", total=128))
+            generation = ''.join(generation)
+            print(f"sample@{step}: {prompt}{generation}")
+
+            # Flush validation metrics.
+            valid_metrics = {"step": step, "loss": valid_loss, "prompt": prompt, "generation": generation}
+            append_to_jsonl([valid_metrics], f"{checkpoint_dir}/metrics_valid.jsonl")
+
+            # Dump checkpoint.
+            checkpoint_path = f"{checkpoint_dir}/step_{step}.pt"
+            print(f"Saving checkpoint to {checkpoint_path}.")
+            torch.save(model._orig_mod.state_dict(), checkpoint_path)
+
 
 if __name__ == "__main__":
     # Default arguments are set to reproduce gpt124M by training for ~10B tokens.
