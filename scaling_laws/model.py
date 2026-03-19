@@ -92,34 +92,22 @@ class GPT(nn.Module):
                 ln_f=nn.LayerNorm(config.model_dim),
             )
         )
-        self._initialize()
+        self.apply(self._initialize)
 
-    def _initialize(self):
-        """Initializes the full model.
+    def _initialize(self, module: nn.Module) -> None:
+        """Initializes the model. 
         
-        Note: Some initializations are redundant with default PyTorch but we do them
-        anyways here for completeness.
+        Some initializations are redundant with PyTorch but are set for completeness.
         """
-        init_std = 0.002
-
-        def init_layer_norm(layer_norm: nn.LayerNorm) -> None:
-            nn.init.ones_(layer_norm.weight)
-            nn.init.zeros_(layer_norm.bias)
-
-        def init_linear(linear: nn.Linear) -> None:
-            nn.init.normal_(linear.weight, mean=0.0, std=init_std)
-            nn.init.zeros_(linear.bias)
-
-        nn.init.normal_(self.model.wte.weight, mean=0.0, std=init_std)
-        nn.init.normal_(self.model.wpe.weight, mean=0.0, std=init_std)
-        for block in self.model.h:
-            init_linear(block.attn.c_attn)
-            init_linear(block.attn.c_proj)
-            init_linear(block.mlp.c_fc)
-            init_linear(block.mlp.c_proj)
-            init_layer_norm(block.ln_1)
-            init_layer_norm(block.ln_2)
-        init_layer_norm(self.model.ln_f)
+        init_std = 0.02
+        if isinstance(module, nn.Embedding):
+            nn.init.normal_(module.weight, mean=0.0, std=init_std)
+        elif isinstance(module, nn.Linear):
+            nn.init.normal_(module.weight, mean=0.0, std=init_std)
+            nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.LayerNorm):
+            nn.init.ones_(module.weight)
+            nn.init.zeros_(module.bias)
 
     @property
     def num_params(self) -> tuple[int, int, int]:
