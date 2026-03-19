@@ -70,7 +70,7 @@ def train(
     checkpoint_dir = f"models/{name}"
     
     # Create data loader, model, optim, scheduler.
-    data_loader = create_data_loader(batch_size, seq_len)
+    data_loader = iter(create_data_loader(batch_size, seq_len))
     model = GPT(gpt_config).to(device=device, dtype=dtype)
     model = torch.compile(
         model, dynamic=False, fullgraph=True, options={"triton.cudagraphs": True, "shape_padding": True}
